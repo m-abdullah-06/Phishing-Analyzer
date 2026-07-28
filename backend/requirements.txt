@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+httpx
+groq
+python-dotenv
+pydantic
+python-multipart
+dnspython
+dkimpy
+beautifulsoup4
