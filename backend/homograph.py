@@ -84,5 +84,15 @@ def check_homograph(domain: str) -> dict:
                 "detail": f"Domain '{domain}' uses character substitution to visually resemble '{brand}'.",
             }
 
+        brand_core = brand.split('.')[0]
+        if len(brand_core) >= 4 and brand_core in normalized_domain and domain != brand:
+            return {
+                "suspicious": True,
+                "matched_brand": brand,
+                "distance": None,
+                "detail": f"Domain '{domain}' contains '{brand_core}' embedded in a longer domain — "
+                          f"a common typosquatting pattern (e.g. 'brandname-secure-login.tld').",
+            }
+
     return {"suspicious": False, "matched_brand": None, "distance": None,
             "detail": "No close match to commonly spoofed brand domains."}

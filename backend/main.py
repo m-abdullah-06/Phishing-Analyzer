@@ -35,6 +35,8 @@ def calculate_risk(headers, spf, dkim, dmarc, homograph_result, urls, attachment
         score += 15
     elif spf.get("result") == "softfail":
         score += 8
+    elif spf.get("result") == "none":
+        score += 10
 
     if dkim.get("signature_present") is False:
         score += 8

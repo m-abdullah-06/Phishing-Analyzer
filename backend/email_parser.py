@@ -21,7 +21,8 @@ IP_ANYWHERE_REGEX = re.compile(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b')
 
 DANGEROUS_EXTENSIONS = {
     '.exe', '.scr', '.bat', '.cmd', '.vbs', '.js', '.jar', '.ps1',
-    '.docm', '.xlsm', '.pptm', '.iso', '.lnk', '.wsf', '.hta', '.msi'
+    '.docm', '.xlsm', '.pptm', '.iso', '.lnk', '.wsf', '.hta', '.msi',
+    '.html', '.htm'
 }
 
 URL_SHORTENERS = {
