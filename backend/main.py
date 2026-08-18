@@ -108,7 +108,7 @@ Risk score: {score}/100 ({risk})
 
     try:
         response = groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="openai/gpt-oss-120b",
             messages=[
                 {
                     "role": "system",
