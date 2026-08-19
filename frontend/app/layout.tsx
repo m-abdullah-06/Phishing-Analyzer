@@ -9,6 +9,9 @@ const jetbrainsMono = JetBrains_Mono({ subsets: ['latin'], variable: '--font-mon
 export const metadata: Metadata = {
   title: 'PhishScan — Email Threat Intelligence',
   description: 'Professional email forensics — SPF/DKIM/DMARC verification, homograph detection, IOC enrichment, and AI-assisted analysis.',
+  icons: {
+    icon: '/favicon.png',
+  },
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
