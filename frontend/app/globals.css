@@ -157,6 +157,9 @@ button, a { transition: all 160ms ease; }
 /* Grid */
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
-@media (max-width: 640px) {
-  .grid-2, .grid-3 { grid-template-columns: 1fr; }
+.grid-hero { display: grid; grid-template-columns: minmax(280px, 1fr) 2fr; gap: 12px; }
+@media (max-width: 800px) {
+  .grid-2, .grid-3, .grid-hero { grid-template-columns: 1fr !important; }
+  .row-between { flex-wrap: wrap; }
+  h1 { font-size: 28px !important; }
 }

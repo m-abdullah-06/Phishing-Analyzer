@@ -486,7 +486,7 @@ export default function Home() {
         <div className="animate-in" style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
 
           {/* Top Level Overview */}
-          <div className="grid-2" style={{ gridTemplateColumns: 'minmax(280px, 1fr) 2fr' }}>
+          <div className="grid-hero">
             
             {/* Verdict Card */}
             <div className="panel" style={{ position: 'relative', overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
