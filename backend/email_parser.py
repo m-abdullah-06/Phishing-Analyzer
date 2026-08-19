@@ -11,6 +11,8 @@ Handles:
 import re
 import hashlib
 import ipaddress
+import io
+import zipfile
 from email import message_from_bytes, policy
 from email.utils import parseaddr
 from bs4 import BeautifulSoup
@@ -24,6 +26,11 @@ DANGEROUS_EXTENSIONS = {
     '.docm', '.xlsm', '.pptm', '.iso', '.lnk', '.wsf', '.hta', '.msi',
     '.html', '.htm'
 }
+
+ARCHIVE_EXTENSIONS = {'.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.xz', '.iso'}
+MACRO_EXTENSIONS = {'.docm', '.xlsm', '.pptm', '.xlsb'}
+EXECUTABLE_EXTENSIONS = {'.exe', '.scr', '.bat', '.cmd', '.com', '.msi', '.jar', '.ps1', '.vbs', '.js', '.jse', '.wsf', '.hta', '.lnk'}
+BENIGN_LEADING_EXTENSIONS = {'.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.txt', '.jpg', '.jpeg', '.png'}
 
 URL_SHORTENERS = {
     'bit.ly', 'tinyurl.com', 'goo.gl', 'ow.ly', 't.co', 'buff.ly',
@@ -39,6 +46,51 @@ SUSPICIOUS_TLDS = {
 def parse_raw_email(raw_bytes: bytes):
     """Parse raw email bytes into a Message object using modern policy."""
     return message_from_bytes(raw_bytes, policy=policy.default)
+
+
+def analyze_mime(msg, raw_bytes: bytes) -> dict:
+    """Inspect MIME structure only; never render, execute, or unpack content."""
+    statuses = []
+    boundaries = []
+    for part in msg.walk():
+        if part.is_multipart():
+            boundary = part.get_boundary()
+            if boundary:
+                boundaries.append(boundary.encode("utf-8", errors="ignore"))
+
+    if msg.is_multipart():
+        statuses.append({"status": "ok", "message": "Multipart detected"})
+    else:
+        statuses.append({"status": "ok", "message": "Single-part message"})
+
+    anomalies = []
+    for boundary in boundaries:
+        opening = b"--" + boundary
+        closing = opening + b"--"
+        if raw_bytes.count(opening) < 2 or closing not in raw_bytes:
+            anomalies.append("Boundary inconsistency")
+
+    declared = {b"--" + boundary for boundary in boundaries}
+    delimiters = set(re.findall(rb"(?m)^--([^\r\n\s]{1,200})(?:--)?\s*$", raw_bytes))
+    unexpected = [delimiter for delimiter in delimiters if b"--" + delimiter.rstrip(b"-") not in declared]
+    if unexpected:
+        anomalies.append("Unexpected MIME delimiter")
+
+    defects = list(getattr(msg, "defects", []))
+    defects.extend(defect for part in msg.walk() for defect in getattr(part, "defects", []))
+    if defects:
+        anomalies.append("Parser recovery required")
+
+    for anomaly in dict.fromkeys(anomalies):
+        statuses.append({"status": "warning", "message": anomaly})
+
+    return {
+        "multipart": msg.is_multipart(),
+        "statuses": statuses,
+        "anomalies": list(dict.fromkeys(anomalies)),
+        "risk_contribution": 5 if anomalies else 0,
+        "detail": "Structural anomaly detected. Further investigation recommended." if anomalies else "MIME structure parsed without detected anomalies.",
+    }
 
 
 def extract_address_parts(header_value: str):
@@ -83,6 +135,7 @@ def get_header_summary(msg):
         "subject": msg.get('Subject', ''),
         "message_id": msg.get('Message-ID', ''),
         "date": msg.get('Date', ''),
+        "list_unsubscribe": msg.get('List-Unsubscribe'),
         "spoofing_flags": spoofing_flags,
     }
 
@@ -146,6 +199,12 @@ def _get_body_parts(msg):
     return plain, html
 
 
+def get_message_text(msg) -> str:
+    """Return decoded body text for linguistic analysis; attachments are excluded."""
+    plain, html = _get_body_parts(msg)
+    return f"{plain}\n{html}".lower()
+
+
 def extract_urls(msg):
     """Extract unique URLs from plain text and HTML bodies (including href attributes)."""
     plain, html = _get_body_parts(msg)
@@ -180,8 +239,37 @@ def extract_urls(msg):
     return results
 
 
+def _static_attachment_properties(filename: str, payload: bytes) -> dict:
+    """Classify bytes by filename, declared-safe metadata, and magic values only."""
+    suffixes = re.findall(r"\.[^.]+", filename.lower())
+    extension = suffixes[-1] if suffixes else ""
+    double_extension = len(suffixes) >= 2 and suffixes[-2] in BENIGN_LEADING_EXTENSIONS and extension in DANGEROUS_EXTENSIONS
+    executable_magic = payload.startswith((b"MZ", b"\x7fELF", b"\xfe\xed\xfa", b"\xcf\xfa\xed\xfe"))
+    payload_buf = io.BytesIO(payload)
+    archive = extension in ARCHIVE_EXTENSIONS or zipfile.is_zipfile(payload_buf)
+    nested_archive = False
+    if archive and extension not in ARCHIVE_EXTENSIONS:
+        # is_zipfile consumed the buffer; reset for ZipFile open
+        payload_buf.seek(0)
+    if zipfile.is_zipfile(io.BytesIO(payload)):
+        try:
+            with zipfile.ZipFile(io.BytesIO(payload)) as archive_file:
+                nested_archive = any(name.lower().endswith(tuple(ARCHIVE_EXTENSIONS)) for name in archive_file.namelist())
+        except (OSError, zipfile.BadZipFile):
+            pass
+    return {
+        "extension": extension,
+        "archive": archive,
+        "nested_archive": nested_archive,
+        "executable": extension in EXECUTABLE_EXTENSIONS or executable_magic,
+        "macro_enabled": extension in MACRO_EXTENSIONS,
+        "suspicious_double_extension": double_extension,
+        "dangerous_extension": extension in DANGEROUS_EXTENSIONS,
+    }
+
+
 def extract_attachments(msg):
-    """Find attachments, compute SHA256, flag dangerous extensions."""
+    """Perform static attachment analysis without executing or extracting payloads."""
     attachments = []
     if not msg.is_multipart():
         return attachments
@@ -201,16 +289,15 @@ def extract_attachments(msg):
             continue
 
         sha256 = hashlib.sha256(payload).hexdigest()
-        ext = ''
-        if filename and '.' in filename:
-            ext = '.' + filename.rsplit('.', 1)[-1].lower()
+        filename = filename or "unnamed"
+        properties = _static_attachment_properties(filename, payload)
 
         attachments.append({
-            "filename": filename or "unnamed",
+            "filename": filename,
             "sha256": sha256,
             "size_bytes": len(payload),
-            "extension": ext,
-            "dangerous_extension": ext in DANGEROUS_EXTENSIONS,
+            "mime_type": part.get_content_type(),
+            **properties,
         })
 
     return attachments

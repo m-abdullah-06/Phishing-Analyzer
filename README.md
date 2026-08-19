@@ -1,109 +1,131 @@
-# Phishing Email Analyzer
+<div align="center">
+  <img src="frontend/public/favicon.png" alt="PhishScan Logo" width="120" />
 
-Upload a raw `.eml` file or paste raw email source. Get real SPF/DKIM/DMARC
-verification, sender spoofing detection, homograph/typosquat detection,
-IOC enrichment (URLs, attachments, origin IP), and a copy-paste-ready
-incident report — mapped to MITRE ATT&CK.
+  # PhishScan v2.0
+  **Enterprise-Grade Email Forensics & Threat Intelligence**
 
-Built as an advanced portfolio project, since phishing accounts for the
-majority of L1 SOC tickets.
+  [![Next.js](https://img.shields.io/badge/Next.js-14-black?style=for-the-badge&logo=next.js)](https://nextjs.org/)
+  [![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-009688?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com/)
+  [![Python](https://img.shields.io/badge/Python-3.10+-3776AB?style=for-the-badge&logo=python)](https://python.org)
+  [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-3178C6?style=for-the-badge&logo=typescript)](https://www.typescriptlang.org/)
 
----
-
-## What Makes This "Advanced"
-
-Most beginner phishing tools just read the `Authentication-Results` header
-the mail server already computed — which is trusting the messenger to grade
-its own homework. This tool does the actual verification itself:
-
-- **SPF** — real DNS TXT lookup, parses `ip4`/`ip6`/`include` mechanisms, and
-  checks the originating IP (extracted from the `Received` chain) directly
-  against the authorized ranges.
-- **DKIM** — full cryptographic signature verification using `dkimpy`,
-  pulling the sender's actual public key from DNS and checking the message
-  wasn't tampered with after signing.
-- **DMARC** — DNS lookup of the `_dmarc` record and policy parsing
-  (`none` / `quarantine` / `reject`).
-- **Homograph detection** — Levenshtein distance + character-substitution
-  checks against a list of commonly spoofed brands, plus punycode (IDN)
-  detection.
-- **Attachment hashing** — SHA256 of every attachment, checked against
-  VirusTotal and MalwareBazaar, flagged for dangerous extensions.
-- **Received chain parsing** — reconstructs the hop-by-hop path and
-  identifies the likely originating IP, then enriches it via VirusTotal
-  and AbuseIPDB.
-
-Known simplifications are documented directly in the code comments
-(`auth_checker.py`) — SPF `include:` mechanisms aren't recursively resolved,
-and DMARC organizational domain lookup is simplified without a full Public
-Suffix List. Worth knowing, not something to hide.
+  *Automated email analysis designed for Tier-1 SOC analysts, mimicking the depth of manual forensics with the speed of AI.*
+</div>
 
 ---
 
-## Stack
+## ⚡ Overview
 
-| Layer | Tech |
-|---|---|
-| Backend | Python + FastAPI |
-| Email parsing | Python's built-in `email` module + BeautifulSoup |
-| Auth verification | `dnspython`, `dkimpy` |
-| Frontend | Next.js + TypeScript |
-| AI Summary | Groq (llama-3.1-8b-instant) |
-| Threat Intel | VirusTotal, AbuseIPDB, MalwareBazaar |
+Phishing accounts for the majority of initial access vectors and L1 SOC alerts. **PhishScan** is a purpose-built incident response tool that unpacks `.eml` files or raw email sources to perform deep forensic analysis. 
+
+Instead of relying on pre-computed headers left by intermediary mail servers, PhishScan performs **real-time cryptographic validation** and dynamic threat intelligence enrichment. It outputs a comprehensive, copy-paste-ready incident report mapped directly to the **MITRE ATT&CK** framework.
+
+### 🛡️ Why PhishScan?
+Most basic phishing tools just read the `Authentication-Results` header — which is trusting the messenger to grade its own homework. PhishScan does the heavy lifting:
+- **True Cryptographic DKIM Validation:** Pulls the sender's actual public key from DNS and verifies the cryptographic signature directly using `dkimpy`.
+- **Direct SPF & DMARC Resolution:** Performs live DNS TXT lookups, parsing `ip4`/`ip6`/`include` mechanisms against the true originating IP extracted from the `Received` chain.
+- **Evidence-Completeness Engine:** Employs a deterministic risk-scoring engine that strictly decouples *email intent* (e.g., Marketing, Account Security) from *threat verdict*, ensuring objective analysis without AI hallucination.
+- **Advanced UI:** A sleek, glassmorphic dark-mode dashboard providing immediate visibility into complex forensic data.
 
 ---
 
-## Setup
+## 🚀 Core Features
 
-### 1. Backend
+- **Auth Verification Pipeline:** True validation of SPF, DKIM, and DMARC alignment.
+- **Sender Identity & Spoofing:** Deep analysis of `From`, `Reply-To`, and `Return-Path` mismatches.
+- **Homograph & Typosquat Detection:** Evaluates Levenshtein distance and character substitutions against major brands, combined with Punycode (IDN) detection.
+- **Content & Intent Analysis:** Heuristic detection of high-pressure social engineering tactics, credential harvesting language, and structural MIME anomalies (e.g., evasion via malformed boundaries).
+- **Automated IOC Enrichment:** 
+  - **URLs:** Extraction, defanging, and reputation checks via **VirusTotal**.
+  - **Attachments:** Static analysis (dangerous extensions, macros, nested archives) and SHA256 hashing checked against **VirusTotal** and **MalwareBazaar**.
+  - **Infrastructure:** Originating IP extraction enriched via **AbuseIPDB**.
+- **AI Analyst Summary:** Leverages Groq (Llama-3) to synthesize a concise, human-readable executive summary strictly grounded in the deterministic forensic evidence.
+
+---
+
+## 🏗️ Architecture Stack
+
+| Component | Technology | Description |
+| :--- | :--- | :--- |
+| **Frontend** | Next.js 14, React, TypeScript | Premium glassmorphic UI, responsive grid layouts, built with Lucide icons. |
+| **Backend** | Python, FastAPI | High-concurrency async API handling heavy DNS, crypto, and network I/O. |
+| **Email Parsing** | `email` (Python), `BeautifulSoup` | Safe MIME traversal and payload extraction (no execution). |
+| **Validation** | `dnspython`, `dkimpy` | Cryptographic signature verification and DNS resolution. |
+| **AI Engine** | Groq (llama-3.1-8b) | High-speed LLM inference for evidence summarization. |
+| **Threat Intel** | VT, AbuseIPDB, MalwareBazaar | API integrations for hash, URL, and IP reputation. |
+
+---
+
+## 🛠️ Installation & Setup
+
+### 1. Backend Setup
+Navigate to the backend directory and set up the Python environment:
 ```bash
 cd backend
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
+```
+
+Configure your environment variables:
+```bash
 cp .env.example .env
-# Fill in your API keys
+# Edit .env and insert your API keys
+```
+
+Start the FastAPI server:
+```bash
 uvicorn main:app --reload --port 8000
 ```
 
-### 2. Frontend
+### 2. Frontend Setup
+Navigate to the frontend directory:
 ```bash
 cd frontend
 npm install
+```
+
+Configure the API connection:
+```bash
 echo "NEXT_PUBLIC_API_URL=http://localhost:8000" > .env.local
+```
+
+Start the Next.js development server:
+```bash
 npm run dev
 ```
 
-Open http://localhost:3000
-
-### 3. Test it
-A sample phishing `.eml` is included at the project root:
-`sample-phishing-email.eml` — a fabricated PayPal-spoofing example with
-mismatched Reply-To/Return-Path domains, a bit.ly link, and a fake `.exe`
-attachment. Upload it to see the full pipeline run end to end.
+Visit `http://localhost:3000` in your browser.
 
 ---
 
-## API Keys Needed
+## 🔑 Required API Keys
 
-- VirusTotal: https://www.virustotal.com/gui/join-us
-- AbuseIPDB: https://www.abuseipdb.com/register
-- MalwareBazaar (Auth-Key required as of 2025): https://auth.abuse.ch
-- Groq: https://console.groq.com
+To unlock the full potential of IOC enrichment and AI summarization, you will need the following free API keys:
 
----
-
-## MITRE ATT&CK Techniques Mapped
-
-| ID | Name | Triggered when |
-|---|---|---|
-| T1566 | Phishing | Always (base technique) |
-| T1566.001 | Spearphishing Attachment | Attachment present |
-| T1566.002 | Spearphishing Link | URL(s) present |
-| T1204.001 | User Execution: Malicious Link | URL(s) present |
-| T1204.002 | User Execution: Malicious File | Attachment present |
-| T1656 | Impersonation | Homograph/spoofing detected |
+- **VirusTotal:** [virustotal.com/gui/join-us](https://www.virustotal.com/gui/join-us)
+- **AbuseIPDB:** [abuseipdb.com/register](https://www.abuseipdb.com/register)
+- **MalwareBazaar:** [auth.abuse.ch](https://auth.abuse.ch) *(Auth-Key required)*
+- **Groq:** [console.groq.com](https://console.groq.com)
 
 ---
 
-## Author
+## 🗺️ MITRE ATT&CK Mapping
 
-Muhammad Abdullah — [github.com/m-abdullah-06](https://github.com/m-abdullah-06)
+PhishScan automatically maps findings to the MITRE ATT&CK framework, aiding in standardized incident reporting:
+
+| ID | Technique | Trigger Condition |
+| :--- | :--- | :--- |
+| **T1566** | Phishing | Base classification for malicious/suspicious emails |
+| **T1566.001** | Spearphishing Attachment | Malicious or suspicious attachments identified |
+| **T1566.002** | Spearphishing Link | Malicious or suspicious URLs extracted |
+| **T1204.001** | User Execution: Malicious Link | Malicious URLs extracted |
+| **T1204.002** | User Execution: Malicious File | Executable or malicious files attached |
+| **T1656** | Impersonation | Homograph attacks or severe sender spoofing detected |
+
+---
+
+<div align="center">
+  <p>Built by <strong>Muhammad Abdullah</strong> — <a href="https://github.com/m-abdullah-06">@m-abdullah-06</a></p>
+  <p><em>Protecting inboxes, one header at a time.</em></p>
+</div>
