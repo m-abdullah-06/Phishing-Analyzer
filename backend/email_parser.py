@@ -58,6 +58,7 @@ def analyze_mime(msg, raw_bytes: bytes) -> dict:
             if boundary:
                 boundaries.append(boundary.encode("utf-8", errors="ignore"))
 
+    content_type = (msg.get_content_type() or "unknown").lower()
     if msg.is_multipart():
         statuses.append({"status": "ok", "message": "Multipart detected"})
     else:
@@ -86,6 +87,8 @@ def analyze_mime(msg, raw_bytes: bytes) -> dict:
 
     return {
         "multipart": msg.is_multipart(),
+        "content_type": content_type,
+        "mime_type": content_type,
         "statuses": statuses,
         "anomalies": list(dict.fromkeys(anomalies)),
         "risk_contribution": 5 if anomalies else 0,

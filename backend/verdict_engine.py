@@ -71,9 +71,12 @@ def determine_threat_level(score: int, critical_indicator: bool = False) -> str:
     return "Low"
 
 
-def classify_email_type(headers, spf, dkim, dmarc, homograph_result, urls, attachments, origin_ip_result, sender_identity=None, content_analysis=None, esp_analysis=None) -> str:
+def classify_email_type(headers, spf, dkim, dmarc, homograph_result, urls, attachments, origin_ip_result, sender_identity=None, content_analysis=None, esp_analysis=None, mime_analysis=None) -> str:
     subject = _normalize_subject(headers.get("subject", ""))
-    
+
+    if mime_analysis and mime_analysis.get("anomalies"):
+        return "Malformed"
+
     # Check ESP characteristics for marketing/newsletters
     if esp_analysis and esp_analysis.get("list_unsubscribe"):
         return "Marketing"
@@ -92,7 +95,17 @@ def classify_email_type(headers, spf, dkim, dmarc, homograph_result, urls, attac
         return "Personal"
     if any(token in subject for token in ["malformed", "garbled", "invalid", "=?", "\ufffd"]):
         return "Malformed"
-        
+
+    mime_type = (mime_analysis or {}).get("content_type") or (mime_analysis or {}).get("mime_type")
+    if mime_type:
+        mime_type = mime_type.lower()
+        if "text/plain" in mime_type:
+            return "text/plain"
+        if "text/html" in mime_type:
+            return "text/html"
+        if "multipart/" in mime_type:
+            return "multipart/mixed"
+
     # If there is basically no structure to indicate what it is
     if not subject and not headers.get("from"):
         return "Unknown"
@@ -270,6 +283,7 @@ def calculate_risk_profile(headers, spf, dkim, dmarc, homograph_result, urls, at
         sender_identity=sender_identity,
         content_analysis=content_analysis,
         esp_analysis=esp_analysis,
+        mime_analysis=mime_analysis,
     )
     threat_level = determine_threat_level(score, critical_indicator)
 

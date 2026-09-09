@@ -28,26 +28,131 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 groq_client = Groq(api_key=GROQ_API_KEY) if GROQ_API_KEY else None
 
 
+def _matching_signal_evidence(signal_set, *signal_names):
+    return [name for name in signal_names if name in signal_set]
+
+
 def build_mitre_mapping(urls, attachments, homograph_result, signals):
-    techniques = [{"id": "T1566", "name": "Phishing"}]
-    
-    if urls:
-        # Check if URL is suspicious or malicious based on the verdict signals
-        has_bad_url = any("suspicious_url" in s or "malicious_url" in s or "credential_harvesting" in s for s in signals)
-        if has_bad_url:
-            techniques.append({"id": "T1566.002", "name": "Spearphishing Link"})
-            techniques.append({"id": "T1204.001", "name": "User Execution: Malicious Link"})
-            
-    if attachments:
-        has_bad_attachment = any("suspicious_attachment" in s or "malicious_attachment" in s for s in signals)
-        if has_bad_attachment:
-            techniques.append({"id": "T1566.001", "name": "Spearphishing Attachment"})
-            techniques.append({"id": "T1204.002", "name": "User Execution: Malicious File"})
-            
-    if homograph_result.get("suspicious") or any("spoof" in s for s in signals) or any("impersonation" in s for s in signals):
-        techniques.append({"id": "T1656", "name": "Impersonation"})
-        
+    signal_set = set(signals or [])
+    techniques = []
+
+    bad_url_signals = _matching_signal_evidence(
+        signal_set,
+        "confirmed_malicious_url",
+        "suspicious_url",
+        "credential_harvesting_language",
+        "content_high_pressure_credential_request",
+    )
+    bad_attachment_signals = _matching_signal_evidence(
+        signal_set,
+        "known_malicious_attachment_hash",
+        "suspicious_attachment",
+    )
+    impersonation_signals = _matching_signal_evidence(
+        signal_set,
+        "display_name_impersonation",
+        "from_replyto_mismatch",
+        "sender_brand_impersonation",
+        "sender_domain_mismatch",
+    )
+
+    has_bad_url = bool(bad_url_signals)
+    has_bad_attachment = bool(bad_attachment_signals)
+    is_impersonation = bool(
+        homograph_result.get("suspicious")
+        or bool(impersonation_signals)
+        or any("spoof" in s for s in signal_set)
+        or any("impersonation" in s for s in signal_set)
+    )
+
+    if has_bad_url or has_bad_attachment:
+        techniques.append({
+            "id": "T1566",
+            "name": "Phishing",
+            "evidence": sorted(bad_url_signals + bad_attachment_signals),
+        })
+
+    if has_bad_url:
+        url_evidence = sorted(bad_url_signals)
+        techniques.append({
+            "id": "T1566.002",
+            "name": "Spearphishing Link",
+            "evidence": url_evidence,
+        })
+        techniques.append({
+            "id": "T1204.001",
+            "name": "User Execution: Malicious Link",
+            "evidence": url_evidence,
+        })
+
+    if has_bad_attachment:
+        attachment_evidence = sorted(bad_attachment_signals)
+        techniques.append({
+            "id": "T1566.001",
+            "name": "Spearphishing Attachment",
+            "evidence": attachment_evidence,
+        })
+        techniques.append({
+            "id": "T1204.002",
+            "name": "User Execution: Malicious File",
+            "evidence": attachment_evidence,
+        })
+
+    if is_impersonation:
+        techniques.append({
+            "id": "T1656",
+            "name": "Impersonation",
+            "evidence": sorted(impersonation_signals + ["display_name_impersonation"] if homograph_result.get("suspicious") else impersonation_signals),
+        })
+
     return techniques
+
+
+def format_auth_summary(spf, dkim, dmarc):
+    def summarize_auth(label, result_obj, default_label):
+        if not result_obj:
+            return f"{label}=no data ({default_label})"
+
+        impact = result_obj.get("impact", {}) if isinstance(result_obj, dict) else {}
+        risk_contribution = int(impact.get("risk_contribution", 0) or 0)
+        state = (result_obj.get("state") or result_obj.get("result") or "unknown").upper()
+        policy = result_obj.get("policy")
+
+        if risk_contribution > 0:
+            return f"{label}={state.lower()} (+{risk_contribution} risk contribution)"
+
+        if state in {"NONE", "NO DATA", "UNKNOWN"} or state == "NONE":
+            return f"{label}=none; No {label} risk contribution (+0)"
+
+        if state == "PASS":
+            return f"{label}=pass; No {label} risk contribution (+0)"
+
+        if policy in {None, "NONE", "none"}:
+            return f"{label}=none; No {label} risk contribution (+0)"
+
+        return f"{label}={state.lower()}; No {label} risk contribution (+0)"
+
+    spf_summary = summarize_auth("SPF", spf, "no SPF evidence")
+    dkim_value = dkim.get("valid") if isinstance(dkim, dict) else None
+    if dkim_value is None and isinstance(dkim, dict) and dkim.get("state", "").upper() in {"NONE", "UNKNOWN"}:
+        dkim_summary = "DKIM=none; No DKIM risk contribution (+0)"
+    elif isinstance(dkim, dict) and dkim.get("impact", {}).get("risk_contribution", 0) > 0:
+        dkim_summary = f"DKIM={str(dkim.get('state', 'unknown')).lower()} (+{dkim.get('impact', {}).get('risk_contribution', 0)} risk contribution)"
+    elif isinstance(dkim, dict) and dkim.get("valid") is True:
+        dkim_summary = "DKIM=pass; No DKIM risk contribution (+0)"
+    else:
+        dkim_summary = "DKIM=none; No DKIM risk contribution (+0)"
+
+    dmarc_policy = dmarc.get("policy") if isinstance(dmarc, dict) else None
+    dmarc_risk = (dmarc.get("impact", {}) if isinstance(dmarc, dict) else {}).get("risk_contribution", 0)
+    if dmarc_risk > 0:
+        dmarc_summary = f"DMARC={str(dmarc.get('state', 'unknown')).lower()} (+{dmarc_risk} risk contribution)"
+    elif dmarc_policy in {None, "none", "NONE"}:
+        dmarc_summary = "DMARC=none; No DMARC risk contribution (+0)"
+    else:
+        dmarc_summary = f"DMARC={str(dmarc.get('state', 'unknown')).lower()}; No DMARC risk contribution (+0)"
+
+    return f"{spf_summary}; {dkim_summary}; {dmarc_summary}"
 
 
 def get_ai_summary(headers, spf, dkim, dmarc, sender_identity, homograph_result, urls, attachments, verdict_profile, mime_analysis=None) -> str:
@@ -161,11 +266,7 @@ Do not restate all fields. Focus on the signals that most strongly support the v
         return content.strip()
     except Exception:
         # Fallback: deterministic narrative, no hallucination possible
-        auth_summary = (
-            f"SPF={spf.get('result', 'UNKNOWN')}, "
-            f"DKIM={'PASS' if dkim.get('valid') else 'FAIL/NONE'}, "
-            f"DMARC={dmarc.get('policy', 'NONE')}"
-        )
+        auth_summary = format_auth_summary(spf, dkim, dmarc)
         critical = structured_evidence["critical_indicators"]
         critical_str = ("; ".join(critical[:3])) if critical else "no critical indicators detected"
         return (
