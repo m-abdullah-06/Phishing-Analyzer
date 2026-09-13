@@ -18,6 +18,7 @@ API_KEY = os.getenv("API_KEY") or os.getenv("BACKEND_API_KEY") or os.getenv("SHA
 DEFAULT_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
+    "https://phishing-analyzer-abd.vercel.app",
 ]
 
 def get_allowed_origins():
