@@ -573,6 +573,12 @@ export default function Home() {
     if (mode === "upload" && !fileObj) return;
     if (mode === "paste" && !rawEmail.trim()) return;
 
+    if (mode === "upload" && fileObj && fileObj.size > 8 * 1024 * 1024) {
+      setError("The uploaded file is too large. Please use a file smaller than 8 MB.");
+      setResult(null);
+      return;
+    }
+
     setLoading(true);
     setError("");
     setResult(null);
