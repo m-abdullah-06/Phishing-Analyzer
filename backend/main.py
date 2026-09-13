@@ -1,10 +1,46 @@
+import logging
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.concurrency import run_in_threadpool
+from starlette.requests import Request
 import os
+import time
 from groq import Groq
 from dotenv import load_dotenv
 load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
+
+logger = logging.getLogger(__name__)
+
+MAX_EMAIL_BYTES = int(os.getenv("MAX_EMAIL_BYTES", "8388608"))
+RATE_LIMIT_MAX_REQUESTS = int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "10"))
+RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60"))
+API_KEY = os.getenv("API_KEY") or os.getenv("BACKEND_API_KEY") or os.getenv("SHARED_API_KEY")
+DEFAULT_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+def get_allowed_origins():
+    configured = []
+    for raw_value in os.getenv("CORS_ALLOWED_ORIGINS", "").split(","):
+        value = raw_value.strip()
+        if value:
+            configured.append(value)
+
+    for candidate in (
+        os.getenv("FRONTEND_URL"),
+        os.getenv("VERCEL_FRONTEND_URL"),
+        os.getenv("NEXT_PUBLIC_API_URL"),
+    ):
+        if candidate:
+            normalized = candidate.rstrip("/")
+            if normalized not in configured:
+                configured.append(normalized)
+
+    return configured or DEFAULT_ALLOWED_ORIGINS
+
+
+ALLOWED_ORIGINS = get_allowed_origins()
 
 import email_parser
 import auth_checker
@@ -18,7 +54,7 @@ app = FastAPI(title="Phishing Email Analyzer API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -106,6 +142,85 @@ def build_mitre_mapping(urls, attachments, homograph_result, signals):
         })
 
     return techniques
+
+
+def reject_if_too_large(size_bytes: int, label: str = "Email"):
+    if size_bytes > MAX_EMAIL_BYTES:
+        max_mb = MAX_EMAIL_BYTES / (1024 * 1024)
+        raise HTTPException(
+            status_code=413,
+            detail=f"{label} exceeds the maximum allowed size of {max_mb:.1f} MB.",
+        )
+
+
+_RATE_LIMIT_BUCKETS = {}
+
+
+def get_client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for")
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+    if request.client:
+        return request.client.host
+    return "unknown"
+
+
+def enforce_rate_limit(client_ip: str):
+    if RATE_LIMIT_MAX_REQUESTS <= 0:
+        return
+
+    current_epoch = time.time()
+    bucket = _RATE_LIMIT_BUCKETS.setdefault(client_ip, [])
+    bucket[:] = [ts for ts in bucket if current_epoch - ts < RATE_LIMIT_WINDOW_SECONDS]
+
+    if len(bucket) >= RATE_LIMIT_MAX_REQUESTS:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many requests from this IP. Please wait a few moments before retrying.",
+        )
+
+    bucket.append(current_epoch)
+
+
+def require_api_key(request: Request):
+    if not API_KEY:
+        return
+
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.lower().startswith("bearer "):
+        provided_key = auth_header.split(" ", 1)[1].strip()
+    else:
+        provided_key = request.headers.get("x-api-key", "")
+
+    if provided_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key.")
+
+
+def validate_email_bytes(raw_bytes: bytes):
+    if not raw_bytes:
+        raise HTTPException(status_code=400, detail="Empty email content.")
+
+    reject_if_too_large(len(raw_bytes), "Uploaded email")
+
+    if raw_bytes.startswith(b"PK\x03\x04"):
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid .eml email.")
+
+    try:
+        msg = email_parser.parse_raw_email(raw_bytes)
+    except Exception as exc:
+        logger.warning("Email parse failed: %s", exc, exc_info=False)
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid .eml email.") from exc
+
+    if not msg or not msg.keys():
+        raise HTTPException(status_code=400, detail="Uploaded file is not a valid .eml email.")
+
+    has_email_headers = any(
+        msg.get(header) for header in ("From", "To", "Subject", "Date", "Message-ID", "Return-Path")
+    )
+    if not has_email_headers:
+        raise HTTPException(status_code=400, detail="Uploaded file does not appear to be a valid email message.")
+
+    return msg
 
 
 def format_auth_summary(spf, dkim, dmarc):
@@ -258,14 +373,15 @@ Do not restate all fields. Focus on the signals that most strongly support the v
                 {"role": "user", "content": USER_PROMPT},
             ],
             max_tokens=1024,
-            temperature=0.2,  # Low temperature for factual, consistent output
+            temperature=0.2,
+            timeout=10,
         )
         content = response.choices[0].message.content
         if not content or not content.strip():
             raise ValueError("Model returned empty content (possibly filtered)")
         return content.strip()
-    except Exception:
-        # Fallback: deterministic narrative, no hallucination possible
+    except Exception as exc:
+        logger.warning("Groq summary generation failed; using deterministic fallback: %s", exc, exc_info=False)
         auth_summary = format_auth_summary(spf, dkim, dmarc)
         critical = structured_evidence["critical_indicators"]
         critical_str = ("; ".join(critical[:3])) if critical else "no critical indicators detected"
@@ -277,22 +393,25 @@ Do not restate all fields. Focus on the signals that most strongly support the v
         )
 
 
-@app.post("/api/analyze")
-async def analyze_email(
+@app.post("/api/v1/analyze")
+async def analyze_email_v1(
+    request: Request,
     file: UploadFile = File(None),
     raw_email: str = Form(None),
 ):
+    require_api_key(request)
+    enforce_rate_limit(get_client_ip(request))
+
     if file:
+        if file.size is not None:
+            reject_if_too_large(file.size, "Uploaded email")
         raw_bytes = await file.read()
     elif raw_email:
         raw_bytes = raw_email.encode('utf-8')
     else:
         raise HTTPException(status_code=400, detail="Provide either a .eml file or raw email text.")
 
-    if not raw_bytes:
-        raise HTTPException(status_code=400, detail="Empty email content.")
-
-    msg = email_parser.parse_raw_email(raw_bytes)
+    msg = validate_email_bytes(raw_bytes)
     headers = email_parser.get_header_summary(msg)
     mime_analysis = email_parser.analyze_mime(msg, raw_bytes)
     received_chain, origin_ip = email_parser.extract_received_chain(msg)
@@ -335,8 +454,8 @@ async def analyze_email(
         if mb_found:
             try:
                 mb_family = mb_data.get("data", [{}])[0].get("signature")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("MalwareBazaar family parsing failed for %s: %s", attachment.get("sha256"), exc, exc_info=False)
         attachment["mb_found"] = mb_found
         attachment["mb_family"] = mb_family
 
@@ -349,8 +468,8 @@ async def analyze_email(
         abuse_confidence = 0
         try:
             abuse_confidence = abuse_data.get("data", {}).get("abuseConfidenceScore", 0)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("AbuseIPDB confidence parsing failed for %s: %s", origin_ip, exc, exc_info=False)
         origin_ip_result["vt_malicious"] = stats["malicious"]
         origin_ip_result["abuse_confidence"] = abuse_confidence
         origin_ip_result["malicious"] = stats["malicious"] > 0 or abuse_confidence >= 50
@@ -406,6 +525,15 @@ async def analyze_email(
         "origin_ip": origin_ip_result,
         "mitre_attack": mitre,
     }
+
+
+@app.post("/api/analyze")
+async def analyze_email(
+    request: Request,
+    file: UploadFile = File(None),
+    raw_email: str = Form(None),
+):
+    return await analyze_email_v1(request, file=file, raw_email=raw_email)
 
 
 @app.get("/health")

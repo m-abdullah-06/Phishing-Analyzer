@@ -8,6 +8,7 @@ Handles:
 - Attachment extraction with SHA256 hashing
 """
 
+import logging
 import re
 import hashlib
 import ipaddress
@@ -16,6 +17,8 @@ import zipfile
 from email import message_from_bytes, policy
 from email.utils import parseaddr
 from bs4 import BeautifulSoup
+
+logger = logging.getLogger(__name__)
 
 URL_REGEX = re.compile(r'https?://[^\s<>"\')\]]+', re.IGNORECASE)
 IP_IN_BRACKETS_REGEX = re.compile(r'\[(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\]')
@@ -184,7 +187,8 @@ def _get_body_parts(msg):
                 continue
             try:
                 payload = part.get_content()
-            except Exception:
+            except Exception as exc:
+                logger.warning("Failed to decode MIME body part: %s", exc, exc_info=False)
                 continue
             if content_type == 'text/plain' and isinstance(payload, str):
                 plain += payload
@@ -197,8 +201,8 @@ def _get_body_parts(msg):
                 html = payload
             else:
                 plain = payload
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Failed to decode non-multipart message body: %s", exc, exc_info=False)
     return plain, html
 
 
@@ -221,8 +225,9 @@ def extract_urls(msg):
                 href = a_tag['href']
                 if href.startswith('http'):
                     urls.add(href)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("HTML URL extraction fallback triggered: %s", exc, exc_info=False)
+            urls = set(URL_REGEX.findall(plain))
 
     results = []
     for url in urls:

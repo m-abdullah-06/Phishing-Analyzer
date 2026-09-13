@@ -5,8 +5,12 @@ Same pattern as the IOC Enricher project, adapted for use inside the
 phishing analyzer (checking origin IPs, URL domains, and attachment hashes).
 """
 
+import logging
 import os
 import httpx
+
+logger = logging.getLogger(__name__)
+REQUEST_TIMEOUT_SECONDS = float(os.getenv("REQUEST_TIMEOUT_SECONDS", "10"))
 
 VT_API_KEY = os.getenv("VT_API_KEY")
 ABUSEIPDB_API_KEY = os.getenv("ABUSEIPDB_API_KEY")
@@ -18,13 +22,13 @@ async def check_vt_ip(ip: str) -> dict:
         return {}
     headers = {"x-apikey": VT_API_KEY}
     url = f"https://www.virustotal.com/api/v3/ip_addresses/{ip}"
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
         try:
             r = await client.get(url, headers=headers)
             if r.status_code == 200:
                 return r.json()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("VirusTotal IP lookup failed for %s: %s", ip, exc, exc_info=False)
     return {}
 
 
@@ -33,13 +37,13 @@ async def check_vt_domain(domain: str) -> dict:
         return {}
     headers = {"x-apikey": VT_API_KEY}
     url = f"https://www.virustotal.com/api/v3/domains/{domain}"
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
         try:
             r = await client.get(url, headers=headers)
             if r.status_code == 200:
                 return r.json()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("VirusTotal domain lookup failed for %s: %s", domain, exc, exc_info=False)
     return {}
 
 
@@ -48,13 +52,13 @@ async def check_vt_hash(file_hash: str) -> dict:
         return {}
     headers = {"x-apikey": VT_API_KEY}
     url = f"https://www.virustotal.com/api/v3/files/{file_hash}"
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
         try:
             r = await client.get(url, headers=headers)
             if r.status_code == 200:
                 return r.json()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("VirusTotal hash lookup failed for %s: %s", file_hash, exc, exc_info=False)
     return {}
 
 
@@ -63,13 +67,13 @@ async def check_abuseipdb(ip: str) -> dict:
         return {}
     headers = {"Key": ABUSEIPDB_API_KEY, "Accept": "application/json"}
     params = {"ipAddress": ip, "maxAgeInDays": 90}
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
         try:
             r = await client.get("https://api.abuseipdb.com/api/v2/check", headers=headers, params=params)
             if r.status_code == 200:
                 return r.json()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("AbuseIPDB lookup failed for %s: %s", ip, exc, exc_info=False)
     return {}
 
 
@@ -77,7 +81,7 @@ async def check_malwarebazaar(file_hash: str) -> dict:
     if not MALWAREBAZAAR_API_KEY:
         return {"query_status": "no_api_key"}
     headers = {"Auth-Key": MALWAREBAZAAR_API_KEY}
-    async with httpx.AsyncClient(timeout=15) as client:
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT_SECONDS) as client:
         try:
             r = await client.post(
                 "https://mb-api.abuse.ch/api/v1/",
@@ -86,9 +90,9 @@ async def check_malwarebazaar(file_hash: str) -> dict:
             )
             if r.status_code == 200:
                 return r.json()
-        except Exception:
-            pass
-    return {}
+        except Exception as exc:
+            logger.warning("MalwareBazaar lookup failed for %s: %s", file_hash, exc, exc_info=False)
+    return {"query_status": "error", "message": "provider_unavailable"}
 
 
 def parse_vt_stats(vt_data: dict) -> dict:
@@ -98,5 +102,6 @@ def parse_vt_stats(vt_data: dict) -> dict:
         total = sum(stats.values())
         return {"malicious": stats.get("malicious", 0), "total": total,
                 "ratio": f"{stats.get('malicious', 0)}/{total}"}
-    except Exception:
+    except Exception as exc:
+        logger.warning("VirusTotal stats parsing failed: %s", exc, exc_info=False)
         return {"malicious": 0, "total": 0, "ratio": "0/0"}

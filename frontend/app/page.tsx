@@ -585,13 +585,16 @@ export default function Home() {
         formData.append("raw_email", rawEmail);
       }
 
-      const res = await fetch(
-        `${process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000"}/api/analyze`,
-        {
-          method: "POST",
-          body: formData,
+      const apiBaseUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+      const apiKey = process.env.NEXT_PUBLIC_API_KEY || "";
+
+      const res = await fetch(`${apiBaseUrl}/api/v1/analyze`, {
+        method: "POST",
+        headers: {
+          ...(apiKey ? { "X-API-Key": apiKey } : {}),
         },
-      );
+        body: formData,
+      });
       if (!res.ok) throw new Error("Analysis failed");
       const data = await res.json();
       setResult(data);
