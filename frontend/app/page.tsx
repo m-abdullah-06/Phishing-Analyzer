@@ -595,13 +595,46 @@ export default function Home() {
         },
         body: formData,
       });
-      if (!res.ok) throw new Error("Analysis failed");
+
+      if (!res.ok) {
+        let backendMessage = "Analysis failed.";
+
+        try {
+          const payload = await res.json();
+          backendMessage =
+            typeof payload?.detail === "string"
+              ? payload.detail
+              : typeof payload?.error === "string"
+                ? payload.error
+                : backendMessage;
+        } catch {
+          try {
+            const text = await res.text();
+            if (text) backendMessage = text;
+          } catch {
+            // ignore fallback parse errors
+          }
+        }
+
+        if (res.status === 413) {
+          backendMessage = "The uploaded file is too large. Please use a file smaller than 8 MB.";
+        } else if (res.status === 401) {
+          backendMessage = "Invalid or missing API key.";
+        } else if (res.status === 429) {
+          backendMessage = "Too many requests. Please wait a moment and try again.";
+        }
+
+        throw new Error(backendMessage);
+      }
+
       const data = await res.json();
       setResult(data);
-    } catch {
-      setError(
-        "Failed to connect to backend. Make sure it is running on port 8000.",
-      );
+    } catch (err) {
+      const message =
+        err instanceof Error && err.message
+          ? err.message
+          : "Failed to connect to backend. Make sure it is running on port 8000.";
+      setError(message);
     } finally {
       setLoading(false);
     }
